@@ -43,10 +43,6 @@ public class MeshSimulatorService {
         return devices.values();
     }
 
-    public VirtualDevice getDevice(String id) {
-        return devices.get(id);
-    }
-
     /**
      * Sender drops a packet into the mesh by handing it to their own device.
      */

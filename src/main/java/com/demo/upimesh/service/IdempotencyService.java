@@ -39,6 +39,15 @@ public class IdempotencyService {
         return prev == null;
     }
 
+    /**
+     * Release an in-memory claim when processing did not commit.
+     */
+    public void unclaim(String packetHash) {
+        if (packetHash != null) {
+            seen.remove(packetHash);
+        }
+    }
+
     public int size() {
         return seen.size();
     }

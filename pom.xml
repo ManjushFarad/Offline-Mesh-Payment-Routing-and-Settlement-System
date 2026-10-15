@@ -44,6 +44,11 @@
             <artifactId>h2</artifactId>
             <scope>runtime</scope>
         </dependency>
+        <dependency>
+            <groupId>com.mysql</groupId>
+            <artifactId>mysql-connector-j</artifactId>
+            <scope>runtime</scope>
+        </dependency>
 
         <!-- Validation -->
         <dependency>
@@ -70,6 +75,25 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <spring.datasource.url>jdbc:h2:mem:upimesh;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE</spring.datasource.url>
+                        <spring.datasource.driver-class-name>org.h2.Driver</spring.datasource.driver-class-name>
+                        <spring.datasource.username>sa</spring.datasource.username>
+                        <spring.datasource.password></spring.datasource.password>
+                        <spring.jpa.hibernate.ddl-auto>create-drop</spring.jpa.hibernate.ddl-auto>
+                    </systemPropertyVariables>
+                    <environmentVariables>
+                        <SPRING_DATASOURCE_URL>jdbc:h2:mem:upimesh;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE</SPRING_DATASOURCE_URL>
+                        <SPRING_DATASOURCE_DRIVER_CLASS_NAME>org.h2.Driver</SPRING_DATASOURCE_DRIVER_CLASS_NAME>
+                        <SPRING_DATASOURCE_USERNAME>sa</SPRING_DATASOURCE_USERNAME>
+                        <SPRING_DATASOURCE_PASSWORD></SPRING_DATASOURCE_PASSWORD>
+                    </environmentVariables>
+                </configuration>
             </plugin>
         </plugins>
     </build>

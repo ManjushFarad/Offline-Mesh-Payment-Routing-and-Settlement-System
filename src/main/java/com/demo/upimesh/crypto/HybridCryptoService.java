@@ -13,6 +13,7 @@ import javax.crypto.spec.OAEPParameterSpec;
 import javax.crypto.spec.PSource;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.PublicKey;
 import java.security.SecureRandom;
@@ -134,7 +135,7 @@ public class HybridCryptoService {
      */
     public String hashCiphertext(String base64Ciphertext) throws Exception {
         MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
-        byte[] hash = sha256.digest(base64Ciphertext.getBytes());
+        byte[] hash = sha256.digest(base64Ciphertext.getBytes(StandardCharsets.UTF_8));
         StringBuilder hex = new StringBuilder();
         for (byte b : hash) {
             hex.append(String.format("%02x", b));
