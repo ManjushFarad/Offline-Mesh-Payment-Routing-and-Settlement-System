@@ -4,6 +4,8 @@ import com.demo.upimesh.crypto.HybridCryptoService;
 import com.demo.upimesh.crypto.ServerKeyHolder;
 import com.demo.upimesh.model.Account;
 import com.demo.upimesh.model.AccountRepository;
+import com.demo.upimesh.model.LedgerEntry;
+import com.demo.upimesh.model.LedgerEntryRepository;
 import com.demo.upimesh.model.MeshPacket;
 import com.demo.upimesh.model.PaymentInstruction;
 import com.demo.upimesh.model.Transaction;
@@ -15,13 +17,20 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.SpyBean;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.context.TestPropertySource;
 
 import java.math.BigDecimal;
+import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.reset;
 
 /**
  * The killer test: simulates the "three bridges deliver at the same instant"
@@ -44,12 +53,14 @@ class IdempotencyConcurrencyTest {
     @Autowired private IdempotencyService idempotency;
     @Autowired private AccountRepository accounts;
     @Autowired private TransactionRepository transactions;
+    @SpyBean private LedgerEntryRepository ledgerEntries;
     @Autowired private HybridCryptoService crypto;
     @Autowired private ServerKeyHolder serverKey;
 
     @BeforeEach
     void clear() {
         idempotency.clear();
+        reset(ledgerEntries);
     }
 
     @Test
@@ -180,6 +191,99 @@ class IdempotencyConcurrencyTest {
         BigDecimal bobAfter = accounts.findById("bob@demo").orElseThrow().getBalance();
         assertEquals(0, aliceBefore.subtract(sendAmount).compareTo(aliceAfter), "Sender balance should be debited");
         assertEquals(0, bobBefore.add(sendAmount).compareTo(bobAfter), "Receiver balance should be credited");
+    }
+
+    @Test
+    void successfulPaymentCreatesBalancedLedgerEntries() throws Exception {
+        BigDecimal sendAmount = new BigDecimal("50.00");
+        MeshPacket packet = demoService.createPacket(
+                "alice@demo", "bob@demo", sendAmount, "1234", 5);
+
+        BridgeIngestionService.IngestResult r = bridge.ingest(packet, "bridge-ledger", 1);
+
+        assertEquals("SETTLED", r.outcome(), "Payment outcome should be SETTLED");
+        assertNotNull(r.packetHash(), "Packet hash must be present in result");
+
+        List<LedgerEntry> entries = ledgerEntries.findByPacketHash(r.packetHash());
+        assertEquals(2, entries.size(), "Should create exactly two ledger entries for the payment");
+
+        LedgerEntry debit = entries.stream()
+                .filter(e -> e.getEntryType() == LedgerEntry.EntryType.DEBIT)
+                .findFirst()
+                .orElse(null);
+
+        LedgerEntry credit = entries.stream()
+                .filter(e -> e.getEntryType() == LedgerEntry.EntryType.CREDIT)
+                .findFirst()
+                .orElse(null);
+
+        assertNotNull(debit, "One entry must be DEBIT");
+        assertNotNull(credit, "One entry must be CREDIT");
+
+        assertEquals("alice@demo", debit.getAccountVpa(), "DEBIT entry must belong to sender (alice@demo)");
+        assertEquals("bob@demo", credit.getAccountVpa(), "CREDIT entry must belong to receiver (bob@demo)");
+
+        assertEquals(0, sendAmount.compareTo(debit.getAmount()), "DEBIT entry amount must equal 50.00");
+        assertEquals(0, sendAmount.compareTo(credit.getAmount()), "CREDIT entry amount must equal 50.00");
+    }
+
+    @Test
+    void rejectedPaymentCreatesNoLedgerEntries() throws Exception {
+        BigDecimal aliceBefore = accounts.findById("alice@demo").orElseThrow().getBalance();
+        BigDecimal excessAmount = aliceBefore.add(new BigDecimal("1000.00"));
+
+        MeshPacket packet = demoService.createPacket(
+                "alice@demo", "bob@demo", excessAmount, "1234", 5);
+
+        BridgeIngestionService.IngestResult r = bridge.ingest(packet, "bridge-reject-ledger", 1);
+
+        assertEquals("REJECTED", r.outcome(), "Payment outcome should be REJECTED");
+        assertNotNull(r.packetHash(), "Packet hash must be present in result");
+
+        List<LedgerEntry> entries = ledgerEntries.findByPacketHash(r.packetHash());
+        assertTrue(entries.isEmpty(), "Rejected payment must create zero ledger entries");
+        assertEquals(0, entries.size(), "Ledger entries list size should be 0");
+    }
+
+    @Test
+    void settlementRollsBackWhenLedgerWriteFails() throws Exception {
+        BigDecimal aliceBefore = accounts.findById("alice@demo").orElseThrow().getBalance();
+        BigDecimal bobBefore = accounts.findById("bob@demo").orElseThrow().getBalance();
+
+        BigDecimal sendAmount = new BigDecimal("50.00");
+        MeshPacket packet = demoService.createPacket(
+                "alice@demo", "bob@demo", sendAmount, "1234", 5);
+        String packetHash = crypto.hashCiphertext(packet.getCiphertext());
+
+        // Simulate failure during credit ledger entry save (after debit entry save was invoked)
+        doThrow(new DataIntegrityViolationException("Simulated credit ledger write failure"))
+                .when(ledgerEntries).save(argThat(entry -> entry != null && entry.getEntryType() == LedgerEntry.EntryType.CREDIT));
+
+        try {
+            BridgeIngestionService.IngestResult r = bridge.ingest(packet, "bridge-fail", 1);
+            assertEquals("INVALID", r.outcome(), "Outcome should be INVALID due to ledger write failure");
+            assertEquals("data_integrity_violation", r.reason());
+
+            // 1. Sender balance is unchanged
+            BigDecimal aliceAfter = accounts.findById("alice@demo").orElseThrow().getBalance();
+            assertEquals(0, aliceBefore.compareTo(aliceAfter), "Sender balance must remain unchanged after rollback");
+
+            // 2. Receiver balance is unchanged
+            BigDecimal bobAfter = accounts.findById("bob@demo").orElseThrow().getBalance();
+            assertEquals(0, bobBefore.compareTo(bobAfter), "Receiver balance must remain unchanged after rollback");
+
+            // 3. No partial ledger entries remain
+            List<LedgerEntry> entries = ledgerEntries.findByPacketHash(packetHash);
+            assertTrue(entries.isEmpty(), "No partial ledger entries must remain after rollback");
+            assertEquals(0, entries.size());
+
+            // 4. No successful transaction record remains
+            Optional<Transaction> txOpt = transactions.findByPacketHash(packetHash);
+            assertTrue(txOpt.isEmpty(), "No transaction record must remain after rollback");
+
+        } finally {
+            reset(ledgerEntries);
+        }
     }
 
     @Test

@@ -2,6 +2,7 @@ package com.demo.upimesh.service;
 
 import com.demo.upimesh.model.Account;
 import com.demo.upimesh.model.AccountRepository;
+import com.demo.upimesh.model.LedgerEntryRepository;
 import com.demo.upimesh.model.PaymentInstruction;
 import com.demo.upimesh.model.Transaction;
 import com.demo.upimesh.model.TransactionRepository;
@@ -10,6 +11,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import com.demo.upimesh.model.LedgerEntry;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -29,12 +31,16 @@ public class SettlementService {
 
     private static final Logger log = LoggerFactory.getLogger(SettlementService.class);
 
-    @Autowired private AccountRepository accounts;
-    @Autowired private TransactionRepository transactions;
+    @Autowired
+    private AccountRepository accounts;
+    @Autowired
+    private TransactionRepository transactions;
+    @Autowired
+    private LedgerEntryRepository ledgerEntries;
 
     @Transactional
     public Transaction settle(PaymentInstruction instruction, String packetHash,
-                              String bridgeNodeId, int hopCount) {
+            String bridgeNodeId, int hopCount) {
 
         Account sender = accounts.findById(instruction.getSenderVpa())
                 .orElseThrow(() -> new IllegalArgumentException(
@@ -60,6 +66,23 @@ public class SettlementService {
         accounts.save(sender);
         accounts.save(receiver);
 
+        LedgerEntry debit = new LedgerEntry();
+        debit.setPacketHash(packetHash);
+        debit.setAccountVpa(sender.getVpa());
+        debit.setEntryType(LedgerEntry.EntryType.DEBIT);
+        debit.setAmount(amount);
+        debit.setCreatedAt(Instant.now());
+
+        LedgerEntry credit = new LedgerEntry();
+        credit.setPacketHash(packetHash);
+        credit.setAccountVpa(receiver.getVpa());
+        credit.setEntryType(LedgerEntry.EntryType.CREDIT);
+        credit.setAmount(amount);
+        credit.setCreatedAt(Instant.now());
+
+        ledgerEntries.save(debit);
+        ledgerEntries.save(credit);
+
         Transaction tx = new Transaction();
         tx.setPacketHash(packetHash);
         tx.setSenderVpa(instruction.getSenderVpa());
@@ -80,7 +103,7 @@ public class SettlementService {
     }
 
     private Transaction recordRejected(PaymentInstruction instruction, String packetHash,
-                                       String bridgeNodeId, int hopCount) {
+            String bridgeNodeId, int hopCount) {
         Transaction tx = new Transaction();
         tx.setPacketHash(packetHash);
         tx.setSenderVpa(instruction.getSenderVpa());
