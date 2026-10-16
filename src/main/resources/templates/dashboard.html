@@ -116,6 +116,7 @@
         </div>
 
         <div style="margin-top: 16px">
+            <button class="danger" onclick="resetState()">⚠️ Reset State</button>
             <button class="danger" onclick="resetMesh()">🗑 Reset Mesh + Cache</button>
         </div>
     </div>
@@ -228,6 +229,15 @@ async function flushBridges() {
             (res.reason ? ` (${res.reason})` : ''));
     });
     refresh();
+}
+
+async function resetState() {
+    if (!confirm('Are you sure you want to reset all state?\n\nThis will restore account balances, delete all transaction records and ledger entries, and clear all mesh packets.')) {
+        return;
+    }
+    const r = await fetch('/api/demo/reset', {method: 'POST'}).then(r => r.json());
+    log('⚠️ ' + r.message);
+    await refresh();
 }
 
 async function resetMesh() {

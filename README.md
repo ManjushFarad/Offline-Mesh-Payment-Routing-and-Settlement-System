@@ -208,9 +208,9 @@ To run the full Maven verification:
 mvn clean verify
 ```
 
-The test suite contains 24 automated tests covering:
+The test suite contains 26 automated tests covering:
 - `MeshSimulatorServiceTest` (10 tests): Packet injection, gossip hop forwarding, TTL decrementing, duplicate suppression on nodes, bridge collection, and mesh reset.
-- `IdempotencyConcurrencyTest` (14 tests): Concurrent bridge duplicate storm, tamper rejection, stale packet rejection, insufficient balance rejection, self-transfer rejection, optimistic locking retries, and double-entry ledger verification.
+- `IdempotencyConcurrencyTest` (16 tests): Concurrent bridge duplicate storm, tamper rejection, stale packet rejection, insufficient balance rejection, self-transfer rejection, optimistic locking retries, double-entry ledger verification, state reset, and pre-reset packet invalidation.
 
 ---
 
@@ -238,7 +238,18 @@ The test suite contains 24 automated tests covering:
   ```
 - Validation rules: `senderVpa` and `receiverVpa` required; `amount` must be greater than zero; `pin` must be 4 to 6 numeric digits.
 
-#### 3. Ingest Packet from Bridge
+#### 3. Reset Demo State
+- **`POST /api/demo/reset`**
+- Transactionally restores all demo accounts to initial balances, deletes all transactions and ledger entries, clears virtual device packet queues, resets the idempotency cache, and prevents pre-reset packets from settling.
+- Response format:
+  ```json
+  {
+    "status": "SUCCESS",
+    "message": "State reset successfully: accounts restored, transactions and ledger cleared, mesh cleared"
+  }
+  ```
+
+#### 4. Ingest Packet from Bridge
 - **`POST /api/bridge/ingest`**
 - The endpoint called when an internet-connected bridge node uploads held packets to the backend.
 - Headers:
@@ -272,6 +283,7 @@ The test suite contains 24 automated tests covering:
 | `/api/mesh/gossip` | `POST` | Executes one round of mesh gossip across virtual devices. |
 | `/api/mesh/flush` | `POST` | Collects packets from online bridge devices and uploads them in parallel. |
 | `/api/mesh/reset` | `POST` | Clears all held packets in devices and resets the idempotency cache. |
+| `/api/demo/reset` | `POST` | Full system state reset: restores accounts, empties DB records, clears mesh. |
 | `/api/accounts` | `GET` | Returns all accounts and current balances. |
 | `/api/transactions` | `GET` | Returns recent settlement transaction records. |
 

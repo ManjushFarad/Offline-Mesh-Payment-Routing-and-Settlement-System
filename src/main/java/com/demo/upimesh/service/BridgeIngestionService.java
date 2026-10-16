@@ -43,6 +43,21 @@ public class BridgeIngestionService {
     @Value("${upi.mesh.packet-max-age-seconds:86400}")
     private long maxAgeSeconds;
 
+    private volatile long resetTimestamp = 0;
+
+    public void recordReset() {
+        this.resetTimestamp = System.currentTimeMillis();
+        log.info("Reset recorded at timestamp {}", resetTimestamp);
+    }
+
+    public long getResetTimestamp() {
+        return resetTimestamp;
+    }
+
+    public void clearResetTimestamp() {
+        this.resetTimestamp = 0;
+    }
+
     public IngestResult ingest(MeshPacket packet, String bridgeNodeId, int hopCount) {
         String packetHash;
         try {
@@ -78,6 +93,15 @@ public class BridgeIngestionService {
         }
         if (ageSeconds < -300) { // small clock-skew tolerance
             return IngestResult.invalid(packetHash, "future_dated");
+        }
+
+        // ---- Invalidate packets signed or created prior to system reset ----
+        if ((packet.getCreatedAt() != null && packet.getCreatedAt() <= resetTimestamp)
+                || (instruction.getSignedAt() != null && instruction.getSignedAt() <= resetTimestamp)) {
+            log.warn("Packet {} created before system reset (createdAt={}, signedAt={}, resetAt={}), rejected",
+                    packetHash.substring(0, Math.min(12, packetHash.length())) + "...",
+                    packet.getCreatedAt(), instruction.getSignedAt(), resetTimestamp);
+            return IngestResult.invalid(packetHash, "stale_packet");
         }
 
         // ---- Durable duplicate detection ----

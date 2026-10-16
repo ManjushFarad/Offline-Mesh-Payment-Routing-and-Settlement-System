@@ -15,6 +15,8 @@ import com.demo.upimesh.service.DemoService;
 import com.demo.upimesh.service.IdempotencyService;
 import com.demo.upimesh.controller.ApiController;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.demo.upimesh.service.MeshSimulatorService;
+import com.demo.upimesh.service.VirtualDevice;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -58,6 +60,7 @@ class IdempotencyConcurrencyTest {
     @Autowired private DemoService demoService;
     @Autowired private BridgeIngestionService bridge;
     @Autowired private IdempotencyService idempotency;
+    @Autowired private MeshSimulatorService mesh;
     @Autowired private AccountRepository accounts;
     @Autowired private TransactionRepository transactions;
     @SpyBean private LedgerEntryRepository ledgerEntries;
@@ -68,6 +71,7 @@ class IdempotencyConcurrencyTest {
     void clear() {
         idempotency.clear();
         reset(ledgerEntries);
+        bridge.clearResetTimestamp();
     }
 
     // =========================================================================
@@ -581,5 +585,84 @@ class IdempotencyConcurrencyTest {
                         .content(objectMapper.writeValueAsString(req6)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.packetId").isNotEmpty());
+    }
+
+    // =========================================================================
+    // 9. Demo State Reset
+    // =========================================================================
+
+    @Test
+    void resetStateRestoresBalancesClearsTablesAndClearsMeshAndIdempotency() throws Exception {
+        // 1. Perform a transaction that modifies state
+        MeshPacket packet = demoService.createPacket(
+                "alice@demo", "bob@demo", new BigDecimal("100.00"), "1234", 5);
+        bridge.ingest(packet, "bridge-1", 1);
+
+        // Inject packet into mesh and gossip
+        mesh.inject("phone-alice", packet);
+        mesh.gossipOnce();
+
+        // Verify state is modified before reset
+        BigDecimal aliceModified = accounts.findById("alice@demo").orElseThrow().getBalance();
+        assertTrue(new BigDecimal("5000.00").compareTo(aliceModified) > 0);
+        assertTrue(transactions.count() > 0, "Transactions should exist before reset");
+        assertTrue(ledgerEntries.count() > 0, "Ledger entries should exist before reset");
+        assertTrue(idempotency.size() > 0, "Idempotency claims should exist before reset");
+        assertTrue(mesh.getDevice("phone-alice").packetCount() > 0, "Mesh device should hold packets");
+
+        // 2. Call reset endpoint
+        mockMvc.perform(post("/api/demo/reset"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("SUCCESS"));
+
+        // 3. Verify balances restored to configured initial amounts
+        assertEquals(0, new BigDecimal("5000.00").compareTo(accounts.findById("alice@demo").orElseThrow().getBalance()));
+        assertEquals(0, new BigDecimal("1000.00").compareTo(accounts.findById("bob@demo").orElseThrow().getBalance()));
+        assertEquals(0, new BigDecimal("2500.00").compareTo(accounts.findById("carol@demo").orElseThrow().getBalance()));
+        assertEquals(0, new BigDecimal("500.00").compareTo(accounts.findById("dave@demo").orElseThrow().getBalance()));
+
+        // 4. Verify transaction and ledger tables are empty
+        assertEquals(0, transactions.count(), "Transactions table must be empty after reset");
+        assertEquals(0, ledgerEntries.count(), "Ledger table must be empty after reset");
+
+        // 5. Verify idempotency claims cleared
+        assertEquals(0, idempotency.size(), "Idempotency claims must be cleared after reset");
+
+        // 6. Verify in-memory mesh device queues cleared
+        for (VirtualDevice device : mesh.getDevices()) {
+            assertEquals(0, device.packetCount(), "Device " + device.getDeviceId() + " must have 0 packets");
+        }
+    }
+
+    @Test
+    void oldPacketsCreatedBeforeResetArePreventedFromSettlingAfterReset() throws Exception {
+        // 1. Create packet before reset
+        MeshPacket oldPacket = demoService.createPacket(
+                "alice@demo", "bob@demo", new BigDecimal("100.00"), "1234", 5);
+
+        // 2. Reset system state
+        demoService.resetAllState();
+
+        // 3. Ingest old packet after reset
+        BridgeIngestionService.IngestResult rOld = bridge.ingest(oldPacket, "bridge-old", 1);
+        assertEquals("INVALID", rOld.outcome(), "Old packet must be rejected after reset");
+        assertEquals("stale_packet", rOld.reason());
+
+        // Balances and tables remain unchanged
+        assertEquals(0, new BigDecimal("5000.00").compareTo(accounts.findById("alice@demo").orElseThrow().getBalance()));
+        assertEquals(0, new BigDecimal("1000.00").compareTo(accounts.findById("bob@demo").orElseThrow().getBalance()));
+        assertEquals(0, transactions.count());
+        assertEquals(0, ledgerEntries.count());
+
+        // 4. Create and ingest fresh packet after reset
+        MeshPacket newPacket = demoService.createPacket(
+                "alice@demo", "bob@demo", new BigDecimal("100.00"), "1234", 5);
+        BridgeIngestionService.IngestResult rNew = bridge.ingest(newPacket, "bridge-new", 1);
+        assertEquals("SETTLED", rNew.outcome(), "New packet created after reset should settle normally");
+
+        assertEquals(0, new BigDecimal("4900.00").compareTo(accounts.findById("alice@demo").orElseThrow().getBalance()));
+        assertEquals(0, new BigDecimal("1100.00").compareTo(accounts.findById("bob@demo").orElseThrow().getBalance()));
+        assertEquals(1, transactions.count());
+        assertEquals(2, ledgerEntries.count());
     }
 }

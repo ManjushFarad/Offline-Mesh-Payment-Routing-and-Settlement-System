@@ -73,6 +73,20 @@ public class ApiController {
         ));
     }
 
+    /**
+     * Resets the entire demonstration state: restores account balances,
+     * deletes transactions and ledger entries, clears mesh packets,
+     * and clears idempotency cache.
+     */
+    @PostMapping("/demo/reset")
+    public ResponseEntity<Map<String, Object>> demoReset() {
+        demo.resetAllState();
+        return ResponseEntity.ok(Map.of(
+                "status", "SUCCESS",
+                "message", "State reset successfully: accounts restored, transactions and ledger cleared, mesh cleared"
+        ));
+    }
+
     public static class DemoSendRequest {
         @NotBlank(message = "Sender VPA is required")
         public String senderVpa;

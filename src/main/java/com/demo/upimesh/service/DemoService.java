@@ -18,29 +18,83 @@ import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.UUID;
 
+import com.demo.upimesh.model.LedgerEntryRepository;
+import com.demo.upimesh.model.TransactionRepository;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.Map;
+
 /**
  * Helper service that:
  *   - seeds demo accounts on startup
  *   - simulates "sender phone creates an encrypted packet" flow
+ *   - resets system state to initial configured demo state
  */
 @Service
 public class DemoService {
 
     private static final Logger log = LoggerFactory.getLogger(DemoService.class);
 
+    public static final Map<String, BigDecimal> INITIAL_BALANCES = Map.of(
+            "alice@demo", new BigDecimal("5000.00"),
+            "bob@demo",   new BigDecimal("1000.00"),
+            "carol@demo", new BigDecimal("2500.00"),
+            "dave@demo",  new BigDecimal("500.00")
+    );
+
+    public static final Map<String, String> INITIAL_HOLDERS = Map.of(
+            "alice@demo", "Alice",
+            "bob@demo",   "Bob",
+            "carol@demo", "Carol",
+            "dave@demo",  "Dave"
+    );
+
     @Autowired private AccountRepository accounts;
+    @Autowired private TransactionRepository transactions;
+    @Autowired private LedgerEntryRepository ledgerEntries;
+    @Autowired private MeshSimulatorService mesh;
+    @Autowired private IdempotencyService idempotency;
+    @Autowired private BridgeIngestionService bridge;
     @Autowired private HybridCryptoService crypto;
     @Autowired private ServerKeyHolder serverKey;
 
     @PostConstruct
     public void seedAccounts() {
         if (accounts.count() == 0) {
-            accounts.save(new Account("alice@demo", "Alice",   new BigDecimal("5000.00")));
-            accounts.save(new Account("bob@demo",   "Bob",     new BigDecimal("1000.00")));
-            accounts.save(new Account("carol@demo", "Carol",   new BigDecimal("2500.00")));
-            accounts.save(new Account("dave@demo",  "Dave",    new BigDecimal("500.00")));
+            INITIAL_BALANCES.forEach((vpa, bal) ->
+                    accounts.save(new Account(vpa, INITIAL_HOLDERS.get(vpa), bal)));
             log.info("Seeded 4 demo accounts");
         }
+    }
+
+    /**
+     * Resets the entire demonstration state:
+     *   1. Deletes all ledger entries (respecting foreign-key order).
+     *   2. Deletes all transaction records.
+     *   3. Restores all demo accounts to their configured initial balances without changing identities.
+     *   4. Clears in-memory mesh device packet queues.
+     *   5. Clears in-memory idempotency claims.
+     *   6. Records reset timestamp to invalidate and prevent old packets from settling.
+     */
+    @Transactional
+    public void resetAllState() {
+        ledgerEntries.deleteAllInBatch();
+        transactions.deleteAllInBatch();
+
+        INITIAL_BALANCES.forEach((vpa, bal) -> {
+            Account acc = accounts.findById(vpa).orElse(null);
+            if (acc != null) {
+                acc.setBalance(bal);
+                accounts.save(acc);
+            } else {
+                accounts.save(new Account(vpa, INITIAL_HOLDERS.get(vpa), bal));
+            }
+        });
+
+        mesh.resetMesh();
+        idempotency.clear();
+        bridge.recordReset();
+        log.info("System state reset complete: accounts restored, ledger/transactions cleared, mesh/idempotency cleared");
     }
 
     /**
@@ -55,13 +109,18 @@ public class DemoService {
      */
     public MeshPacket createPacket(String senderVpa, String receiverVpa,
                                    BigDecimal amount, String pin, int ttl) throws Exception {
+        long signedAt = Instant.now().toEpochMilli();
+        if (bridge != null && signedAt <= bridge.getResetTimestamp()) {
+            signedAt = bridge.getResetTimestamp() + 1;
+        }
+
         PaymentInstruction instruction = new PaymentInstruction(
                 senderVpa,
                 receiverVpa,
                 amount,
                 sha256Hex(pin),
                 UUID.randomUUID().toString(),       // nonce — guarantees uniqueness
-                Instant.now().toEpochMilli()        // signedAt — for freshness check
+                signedAt                            // signedAt — for freshness check
         );
 
         String ciphertext = crypto.encrypt(instruction, serverKey.getPublicKey());
@@ -69,7 +128,7 @@ public class DemoService {
         MeshPacket packet = new MeshPacket();
         packet.setPacketId(UUID.randomUUID().toString());
         packet.setTtl(ttl);
-        packet.setCreatedAt(Instant.now().toEpochMilli());
+        packet.setCreatedAt(signedAt);
         packet.setCiphertext(ciphertext);
         return packet;
     }
