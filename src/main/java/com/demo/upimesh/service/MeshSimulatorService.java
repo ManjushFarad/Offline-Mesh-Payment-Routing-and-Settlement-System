@@ -43,6 +43,10 @@ public class MeshSimulatorService {
         return devices.values();
     }
 
+    public VirtualDevice getDevice(String deviceId) {
+        return devices.get(deviceId);
+    }
+
     /**
      * Sender drops a packet into the mesh by handing it to their own device.
      */
@@ -50,8 +54,11 @@ public class MeshSimulatorService {
         VirtualDevice sender = devices.get(senderDeviceId);
         if (sender == null) throw new IllegalArgumentException("Unknown device: " + senderDeviceId);
         sender.hold(packet);
+        String previewId = (packet.getPacketId() != null && packet.getPacketId().length() >= 8)
+                ? packet.getPacketId().substring(0, 8)
+                : String.valueOf(packet.getPacketId());
         log.info("Packet {} injected at {} (TTL={})",
-                packet.getPacketId().substring(0, 8), senderDeviceId, packet.getTtl());
+                previewId, senderDeviceId, packet.getTtl());
     }
 
     /**
