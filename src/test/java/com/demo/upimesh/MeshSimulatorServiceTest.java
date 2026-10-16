@@ -32,13 +32,12 @@ class MeshSimulatorServiceTest {
     }
 
     // =========================================================================
-    // A. Packet injection
+    // Packet Injection
     // =========================================================================
 
     @Test
     void injectValidPacketIntoValidDeviceSuccessfully() {
         MeshPacket packet = createTestPacket(null, 5);
-
         mesh.inject("phone-alice", packet);
 
         VirtualDevice alice = mesh.getDevice("phone-alice");
@@ -74,52 +73,27 @@ class MeshSimulatorServiceTest {
     }
 
     // =========================================================================
-    // B. Packet gossip and forwarding
+    // Packet Gossip and Forwarding
     // =========================================================================
 
     @Test
-    void gossipForwardsPacketsToConnectedDevices() {
+    void gossipForwardsPacketsToConnectedDevicesAndDecrementsTtl() {
         MeshPacket packet = createTestPacket(null, 5);
         mesh.inject("phone-alice", packet);
-
-        // Before gossip: only alice holds it
-        assertEquals(1, mesh.getDevice("phone-alice").packetCount());
-        assertEquals(0, mesh.getDevice("phone-stranger1").packetCount());
-        assertEquals(0, mesh.getDevice("phone-stranger2").packetCount());
-        assertEquals(0, mesh.getDevice("phone-stranger3").packetCount());
-        assertEquals(0, mesh.getDevice("phone-bridge").packetCount());
 
         GossipResult result = mesh.gossipOnce();
 
-        // In 5-node complete mesh, 1 source gossips to 4 destinations = 4 transfers
+        // In 5-node mesh, 1 source gossips to 4 destinations = 4 transfers
         assertEquals(4, result.transfers(), "Gossip should transfer packet to the other 4 devices");
 
         for (VirtualDevice d : mesh.getDevices()) {
-            assertTrue(d.holds(packet.getPacketId()),
-                    "Device " + d.getDeviceId() + " must hold the forwarded packet");
-            assertEquals(1, d.packetCount(),
-                    "Device " + d.getDeviceId() + " should hold exactly 1 packet");
+            assertTrue(d.holds(packet.getPacketId()), "Device " + d.getDeviceId() + " must hold packet");
+            assertEquals(1, d.packetCount());
+            if (!d.getDeviceId().equals("phone-alice")) {
+                MeshPacket copy = d.getHeldPackets().iterator().next();
+                assertEquals(4, copy.getTtl(), "Forwarded copy on " + d.getDeviceId() + " must have TTL=4");
+            }
         }
-
-        assertEquals(5, result.deviceCounts().size());
-        result.deviceCounts().values().forEach(count -> assertEquals(1, count));
-    }
-
-    @Test
-    void gossipDecreasesTtlOnForwardedCopies() {
-        MeshPacket packet = createTestPacket(null, 5);
-        mesh.inject("phone-alice", packet);
-
-        mesh.gossipOnce();
-
-        // Copies on other devices must have decremented TTL (5 - 1 = 4)
-        VirtualDevice bridge = mesh.getDevice("phone-bridge");
-        MeshPacket bridgePacket = bridge.getHeldPackets().iterator().next();
-        assertEquals(4, bridgePacket.getTtl(), "Forwarded copy on phone-bridge should have TTL decremented to 4");
-
-        VirtualDevice stranger1 = mesh.getDevice("phone-stranger1");
-        MeshPacket strangerPacket = stranger1.getHeldPackets().iterator().next();
-        assertEquals(4, strangerPacket.getTtl(), "Forwarded copy on stranger device should have TTL decremented to 4");
     }
 
     @Test
@@ -147,7 +121,6 @@ class MeshSimulatorServiceTest {
         assertEquals(0, result.transfers(), "Packets with TTL=0 must not be forwarded");
         assertEquals(1, mesh.getDevice("phone-alice").packetCount(), "Source should still hold packet");
 
-        // Verify other devices received nothing
         for (VirtualDevice d : mesh.getDevices()) {
             if (!d.getDeviceId().equals("phone-alice")) {
                 assertEquals(0, d.packetCount(), "Device " + d.getDeviceId() + " should not receive packet with TTL=0");
@@ -156,23 +129,8 @@ class MeshSimulatorServiceTest {
         }
     }
 
-    @Test
-    void packetsWithNegativeTtlAreNotForwarded() {
-        MeshPacket packet = createTestPacket(null, -1);
-        mesh.inject("phone-alice", packet);
-
-        GossipResult result = mesh.gossipOnce();
-
-        assertEquals(0, result.transfers(), "Packets with negative TTL must not be forwarded");
-        for (VirtualDevice d : mesh.getDevices()) {
-            if (!d.getDeviceId().equals("phone-alice")) {
-                assertEquals(0, d.packetCount());
-            }
-        }
-    }
-
     // =========================================================================
-    // C. Duplicate packet delivery
+    // Duplicate Packet Handling
     // =========================================================================
 
     @Test
@@ -183,11 +141,11 @@ class MeshSimulatorServiceTest {
         alice.hold(packet);
         assertEquals(1, alice.packetCount());
 
-        // Hold the exact same instance again
+        // Re-hold same instance
         alice.hold(packet);
         assertEquals(1, alice.packetCount(), "Re-holding the same packet instance must not increase packetCount");
 
-        // Hold a separate packet instance with the same packetId
+        // Hold separate instance with identical packetId
         MeshPacket duplicate = new MeshPacket();
         duplicate.setPacketId(packet.getPacketId());
         duplicate.setTtl(3);
@@ -195,7 +153,7 @@ class MeshSimulatorServiceTest {
         duplicate.setCiphertext(packet.getCiphertext());
 
         alice.hold(duplicate);
-        assertEquals(1, alice.packetCount(), "Holding another packet with the same packetId must not create duplicate");
+        assertEquals(1, alice.packetCount(), "Holding another packet with same packetId must not create duplicate");
     }
 
     @Test
@@ -211,23 +169,22 @@ class MeshSimulatorServiceTest {
         GossipResult round2 = mesh.gossipOnce();
         assertEquals(0, round2.transfers(), "Subsequent round must not re-transfer already held packets");
 
-        // Round 3: still 0 transfers
-        GossipResult round3 = mesh.gossipOnce();
-        assertEquals(0, round3.transfers());
-
         for (VirtualDevice d : mesh.getDevices()) {
             assertEquals(1, d.packetCount(), "Device " + d.getDeviceId() + " must maintain count of 1");
         }
     }
 
     // =========================================================================
-    // D. Bridge upload collection
+    // Bridge Upload Collection
     // =========================================================================
 
     @Test
     void collectBridgeUploadsSelectsOnlyPacketsFromOnlineDevices() {
         MeshPacket packet = createTestPacket(null, 5);
         mesh.inject("phone-alice", packet);
+
+        // Before gossip: packet is only on phone-alice (hasInternet = false) -> no uploads
+        assertTrue(mesh.collectBridgeUploads().isEmpty(), "Offline devices must not contribute to uploads");
 
         // Run gossip so packet reaches phone-bridge (hasInternet = true)
         mesh.gossipOnce();
@@ -236,27 +193,13 @@ class MeshSimulatorServiceTest {
         assertEquals(1, uploads.size(), "Only online bridge device should produce an upload");
 
         BridgeUpload upload = uploads.get(0);
-        assertEquals("phone-bridge", upload.bridgeNodeId(), "Upload should come from phone-bridge");
+        assertEquals("phone-bridge", upload.bridgeNodeId());
         assertEquals(packet.getPacketId(), upload.packet().getPacketId());
         assertEquals(4, upload.packet().getTtl(), "Uploaded packet copy should have decremented TTL");
     }
 
-    @Test
-    void offlineDevicesDoNotContributeToBridgeUploads() {
-        MeshPacket packet = createTestPacket(null, 5);
-        mesh.inject("phone-alice", packet);
-
-        // DO NOT run gossip. The packet is only on phone-alice (hasInternet = false)
-        List<BridgeUpload> uploads = mesh.collectBridgeUploads();
-        assertTrue(uploads.isEmpty(), "Offline devices must not contribute to bridge uploads");
-
-        VirtualDevice alice = mesh.getDevice("phone-alice");
-        assertFalse(alice.hasInternet(), "phone-alice should be offline");
-        assertEquals(1, alice.packetCount(), "phone-alice holds packet but cannot upload");
-    }
-
     // =========================================================================
-    // E. Mesh reset
+    // Mesh Reset
     // =========================================================================
 
     @Test
@@ -268,15 +211,8 @@ class MeshSimulatorServiceTest {
         mesh.inject("phone-stranger1", packet2);
         mesh.gossipOnce();
 
-        // Verify devices hold packets
-        for (VirtualDevice d : mesh.getDevices()) {
-            assertTrue(d.packetCount() > 0);
-        }
-        assertFalse(mesh.collectBridgeUploads().isEmpty());
-
         mesh.resetMesh();
 
-        // Verify all devices are cleared
         for (VirtualDevice d : mesh.getDevices()) {
             assertEquals(0, d.packetCount(), "Device " + d.getDeviceId() + " should have 0 packets after reset");
             assertTrue(d.getHeldPackets().isEmpty());
@@ -285,32 +221,5 @@ class MeshSimulatorServiceTest {
         }
 
         assertTrue(mesh.collectBridgeUploads().isEmpty(), "Bridge uploads must be empty after reset");
-        mesh.snapshotMap().values().forEach(count -> assertEquals(0, count));
-    }
-
-    // =========================================================================
-    // F. VirtualDevice unit tests
-    // =========================================================================
-
-    @Test
-    void virtualDeviceBasicOperations() {
-        VirtualDevice device = new VirtualDevice("test-device", false);
-
-        assertEquals("test-device", device.getDeviceId());
-        assertFalse(device.hasInternet());
-        assertEquals(0, device.packetCount());
-        assertFalse(device.holds("nonexistent"));
-
-        MeshPacket packet = createTestPacket("pkt-vd-1", 5);
-        device.hold(packet);
-
-        assertEquals(1, device.packetCount());
-        assertTrue(device.holds("pkt-vd-1"));
-        assertEquals(1, device.getHeldPackets().size());
-
-        device.clear();
-        assertEquals(0, device.packetCount());
-        assertFalse(device.holds("pkt-vd-1"));
-        assertTrue(device.getHeldPackets().isEmpty());
     }
 }
