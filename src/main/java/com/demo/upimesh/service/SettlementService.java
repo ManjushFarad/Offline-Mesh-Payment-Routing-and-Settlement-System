@@ -42,6 +42,18 @@ public class SettlementService {
     public Transaction settle(PaymentInstruction instruction, String packetHash,
             String bridgeNodeId, int hopCount) {
 
+        if (instruction.getSenderVpa() == null || instruction.getSenderVpa().isBlank()) {
+            throw new IllegalArgumentException("Sender VPA is required");
+        }
+        if (instruction.getReceiverVpa() == null || instruction.getReceiverVpa().isBlank()) {
+            throw new IllegalArgumentException("Receiver VPA is required");
+        }
+
+        BigDecimal amount = instruction.getAmount();
+        if (amount == null || amount.signum() <= 0) {
+            throw new IllegalArgumentException("Amount must be positive");
+        }
+
         Account sender = accounts.findById(instruction.getSenderVpa())
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Unknown sender VPA: " + instruction.getSenderVpa()));
@@ -50,15 +62,15 @@ public class SettlementService {
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Unknown receiver VPA: " + instruction.getReceiverVpa()));
 
-        BigDecimal amount = instruction.getAmount();
-        if (amount.signum() <= 0) {
-            throw new IllegalArgumentException("Amount must be positive");
+        if (sender.getVpa().equalsIgnoreCase(receiver.getVpa())) {
+            log.warn("Self-transfer rejected: sender and receiver are the same account ({})", sender.getVpa());
+            return recordRejected(instruction, packetHash, bridgeNodeId, hopCount, "self_transfer");
         }
 
         if (sender.getBalance().compareTo(amount) < 0) {
             log.warn("Insufficient balance: {} has ₹{}, tried to send ₹{}",
                     sender.getVpa(), sender.getBalance(), amount);
-            return recordRejected(instruction, packetHash, bridgeNodeId, hopCount);
+            return recordRejected(instruction, packetHash, bridgeNodeId, hopCount, "insufficient_balance");
         }
 
         sender.setBalance(sender.getBalance().subtract(amount));
@@ -88,7 +100,7 @@ public class SettlementService {
         tx.setSenderVpa(instruction.getSenderVpa());
         tx.setReceiverVpa(instruction.getReceiverVpa());
         tx.setAmount(amount);
-        tx.setSignedAt(Instant.ofEpochMilli(instruction.getSignedAt()));
+        tx.setSignedAt(instruction.getSignedAt() != null ? Instant.ofEpochMilli(instruction.getSignedAt()) : Instant.now());
         tx.setSettledAt(Instant.now());
         tx.setBridgeNodeId(bridgeNodeId);
         tx.setHopCount(hopCount);
@@ -103,17 +115,23 @@ public class SettlementService {
     }
 
     private Transaction recordRejected(PaymentInstruction instruction, String packetHash,
-            String bridgeNodeId, int hopCount) {
+            String bridgeNodeId, int hopCount, String reason) {
         Transaction tx = new Transaction();
         tx.setPacketHash(packetHash);
         tx.setSenderVpa(instruction.getSenderVpa());
         tx.setReceiverVpa(instruction.getReceiverVpa());
         tx.setAmount(instruction.getAmount());
-        tx.setSignedAt(Instant.ofEpochMilli(instruction.getSignedAt()));
+        tx.setSignedAt(instruction.getSignedAt() != null ? Instant.ofEpochMilli(instruction.getSignedAt()) : Instant.now());
         tx.setSettledAt(Instant.now());
         tx.setBridgeNodeId(bridgeNodeId);
         tx.setHopCount(hopCount);
         tx.setStatus(Transaction.Status.REJECTED);
+        tx.setRejectionReason(reason);
         return transactions.save(tx);
+    }
+
+    private Transaction recordRejected(PaymentInstruction instruction, String packetHash,
+            String bridgeNodeId, int hopCount) {
+        return recordRejected(instruction, packetHash, bridgeNodeId, hopCount, "insufficient_balance");
     }
 }

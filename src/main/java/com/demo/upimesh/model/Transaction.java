@@ -78,6 +78,12 @@ public class Transaction {
     public int getHopCount() { return hopCount; }
     public void setHopCount(int hopCount) { this.hopCount = hopCount; }
 
+    @Column(length = 64)
+    private String rejectionReason;
+
     public Status getStatus() { return status; }
     public void setStatus(Status status) { this.status = status; }
+
+    public String getRejectionReason() { return rejectionReason; }
+    public void setRejectionReason(String rejectionReason) { this.rejectionReason = rejectionReason; }
 }

@@ -167,7 +167,15 @@ public class BridgeIngestionService {
 
     private IngestResult toIngestResult(String packetHash, Transaction tx) {
         if (tx.getStatus() == Transaction.Status.REJECTED) {
-            return IngestResult.rejected(packetHash, "insufficient_balance", tx);
+            String reason = tx.getRejectionReason();
+            if (reason == null || reason.isBlank()) {
+                if (tx.getSenderVpa() != null && tx.getSenderVpa().equalsIgnoreCase(tx.getReceiverVpa())) {
+                    reason = "self_transfer";
+                } else {
+                    reason = "insufficient_balance";
+                }
+            }
+            return IngestResult.rejected(packetHash, reason, tx);
         }
         return IngestResult.settled(packetHash, tx);
     }
