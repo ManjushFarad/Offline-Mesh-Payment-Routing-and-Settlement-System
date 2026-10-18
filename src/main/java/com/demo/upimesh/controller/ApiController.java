@@ -22,22 +22,30 @@ import java.util.*;
  * Public REST surface.
  *
  * The endpoints split into three groups:
- *   /api/server-key      → so simulated senders can fetch the server's public key
- *   /api/mesh/*          → simulator endpoints (inject, gossip, flush)
- *   /api/bridge/ingest   → THE real production endpoint a real bridge node would hit
- *   /api/accounts, /api/transactions → for the dashboard
+ * /api/server-key → so simulated senders can fetch the server's public key
+ * /api/mesh/* → simulator endpoints (inject, gossip, flush)
+ * /api/bridge/ingest → THE real production endpoint a real bridge node would
+ * hit
+ * /api/accounts, /api/transactions → for the dashboard
  */
 @RestController
 @RequestMapping("/api")
 public class ApiController {
 
-    @Autowired private ServerKeyHolder serverKey;
-    @Autowired private DemoService demo;
-    @Autowired private MeshSimulatorService mesh;
-    @Autowired private BridgeIngestionService bridge;
-    @Autowired private AccountRepository accountRepo;
-    @Autowired private TransactionRepository txRepo;
-    @Autowired private IdempotencyService idempotency;
+    @Autowired
+    private ServerKeyHolder serverKey;
+    @Autowired
+    private DemoService demo;
+    @Autowired
+    private MeshSimulatorService mesh;
+    @Autowired
+    private BridgeIngestionService bridge;
+    @Autowired
+    private AccountRepository accountRepo;
+    @Autowired
+    private TransactionRepository txRepo;
+    @Autowired
+    private IdempotencyService idempotency;
 
     // ------------------------------------------------------------------ key
 
@@ -46,8 +54,7 @@ public class ApiController {
         return Map.of(
                 "publicKey", serverKey.getPublicKeyBase64(),
                 "algorithm", "RSA-2048 / OAEP-SHA256",
-                "hybridScheme", "RSA-OAEP encrypts an AES-256-GCM session key"
-        );
+                "hybridScheme", "RSA-OAEP encrypts an AES-256-GCM session key");
     }
 
     // ---------------------------------------------------------------- demo
@@ -69,8 +76,7 @@ public class ApiController {
                 "packetId", packet.getPacketId(),
                 "ciphertextPreview", packet.getCiphertext().substring(0, 64) + "...",
                 "ttl", packet.getTtl(),
-                "injectedAt", startDevice
-        ));
+                "injectedAt", startDevice));
     }
 
     /**
@@ -83,8 +89,8 @@ public class ApiController {
         demo.resetAllState();
         return ResponseEntity.ok(Map.of(
                 "status", "SUCCESS",
-                "message", "State reset successfully: accounts restored, transactions and ledger cleared, mesh cleared"
-        ));
+                "message",
+                "State reset successfully: accounts restored, transactions and ledger cleared, mesh cleared"));
     }
 
     public static class DemoSendRequest {
@@ -118,13 +124,11 @@ public class ApiController {
                     "packetCount", d.packetCount(),
                     "packetIds", d.getHeldPackets().stream()
                             .map(p -> p.getPacketId().substring(0, 8))
-                            .toList()
-            ));
+                            .toList()));
         }
         return Map.of(
                 "devices", deviceData,
-                "idempotencyCacheSize", idempotency.size()
-        );
+                "idempotencyCacheSize", idempotency.size());
     }
 
     @PostMapping("/mesh/gossip")
@@ -132,8 +136,7 @@ public class ApiController {
         MeshSimulatorService.GossipResult r = mesh.gossipOnce();
         return Map.of(
                 "transfers", r.transfers(),
-                "deviceCounts", r.deviceCounts()
-        );
+                "deviceCounts", r.deviceCounts());
     }
 
     /**
@@ -151,23 +154,21 @@ public class ApiController {
         List<Map<String, Object>> results = new ArrayList<>();
         // Upload them in parallel to actually exercise concurrent idempotency.
         uploads.parallelStream().forEach(up -> {
-            BridgeIngestionService.IngestResult r =
-                    bridge.ingest(up.packet(), up.bridgeNodeId(), 5 - up.packet().getTtl());
+            BridgeIngestionService.IngestResult r = bridge.ingest(up.packet(), up.bridgeNodeId(),
+                    5 - up.packet().getTtl());
             synchronized (results) {
                 results.add(Map.of(
                         "bridgeNode", up.bridgeNodeId(),
                         "packetId", up.packet().getPacketId().substring(0, 8),
                         "outcome", r.outcome(),
                         "reason", r.reason() == null ? "" : r.reason(),
-                        "transactionId", r.transactionId() == null ? -1 : r.transactionId()
-                ));
+                        "transactionId", r.transactionId() == null ? -1 : r.transactionId()));
             }
         });
 
         return Map.of(
                 "uploadsAttempted", uploads.size(),
-                "results", results
-        );
+                "results", results);
     }
 
     @PostMapping("/mesh/reset")
