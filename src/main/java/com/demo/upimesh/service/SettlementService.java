@@ -42,10 +42,12 @@ public class SettlementService {
     public Transaction settle(PaymentInstruction instruction, String packetHash,
             String bridgeNodeId, int hopCount) {
 
-        if (instruction.getSenderVpa() == null || instruction.getSenderVpa().isBlank()) {
+        String senderVpa = instruction.getSenderVpa();
+        if (senderVpa == null || senderVpa.isBlank()) {
             throw new IllegalArgumentException("Sender VPA is required");
         }
-        if (instruction.getReceiverVpa() == null || instruction.getReceiverVpa().isBlank()) {
+        String receiverVpa = instruction.getReceiverVpa();
+        if (receiverVpa == null || receiverVpa.isBlank()) {
             throw new IllegalArgumentException("Receiver VPA is required");
         }
 
@@ -54,13 +56,13 @@ public class SettlementService {
             throw new IllegalArgumentException("Amount must be positive");
         }
 
-        Account sender = accounts.findById(instruction.getSenderVpa())
+        Account sender = accounts.findById(senderVpa)
                 .orElseThrow(() -> new IllegalArgumentException(
-                        "Unknown sender VPA: " + instruction.getSenderVpa()));
+                        "Unknown sender VPA: " + senderVpa));
 
-        Account receiver = accounts.findById(instruction.getReceiverVpa())
+        Account receiver = accounts.findById(receiverVpa)
                 .orElseThrow(() -> new IllegalArgumentException(
-                        "Unknown receiver VPA: " + instruction.getReceiverVpa()));
+                        "Unknown receiver VPA: " + receiverVpa));
 
         if (sender.getVpa().equalsIgnoreCase(receiver.getVpa())) {
             log.warn("Self-transfer rejected: sender and receiver are the same account ({})", sender.getVpa());
@@ -128,10 +130,5 @@ public class SettlementService {
         tx.setStatus(Transaction.Status.REJECTED);
         tx.setRejectionReason(reason);
         return transactions.save(tx);
-    }
-
-    private Transaction recordRejected(PaymentInstruction instruction, String packetHash,
-            String bridgeNodeId, int hopCount) {
-        return recordRejected(instruction, packetHash, bridgeNodeId, hopCount, "insufficient_balance");
     }
 }

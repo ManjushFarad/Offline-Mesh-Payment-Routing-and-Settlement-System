@@ -27,6 +27,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.ResultActions;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -91,10 +92,11 @@ class IdempotencyConcurrencyTest {
 
         assertEquals("SETTLED", r.outcome(), "Ingestion should return outcome SETTLED");
         assertNull(r.reason());
-        assertNotNull(r.transactionId());
+        Long txId = r.transactionId();
+        assertNotNull(txId);
 
         // Verify transaction record
-        Transaction tx = transactions.findById(r.transactionId()).orElse(null);
+        Transaction tx = transactions.findById(txId).orElse(null);
         assertNotNull(tx);
         assertEquals(Transaction.Status.SETTLED, tx.getStatus());
         assertEquals(0, sendAmount.compareTo(tx.getAmount()));
@@ -143,10 +145,11 @@ class IdempotencyConcurrencyTest {
 
         assertEquals("REJECTED", r.outcome());
         assertEquals("insufficient_balance", r.reason());
-        assertNotNull(r.transactionId());
+        Long txId = r.transactionId();
+        assertNotNull(txId);
 
         // Verify rejected transaction record
-        Transaction tx = transactions.findById(r.transactionId()).orElse(null);
+        Transaction tx = transactions.findById(txId).orElse(null);
         assertNotNull(tx);
         assertEquals(Transaction.Status.REJECTED, tx.getStatus());
         assertEquals(0, excessAmount.compareTo(tx.getAmount()));
@@ -176,9 +179,10 @@ class IdempotencyConcurrencyTest {
 
         assertEquals("REJECTED", r.outcome());
         assertEquals("self_transfer", r.reason());
-        assertNotNull(r.transactionId());
+        Long txId = r.transactionId();
+        assertNotNull(txId);
 
-        Transaction tx = transactions.findById(r.transactionId()).orElse(null);
+        Transaction tx = transactions.findById(txId).orElse(null);
         assertNotNull(tx);
         assertEquals(Transaction.Status.REJECTED, tx.getStatus());
         assertEquals("self_transfer", tx.getRejectionReason());
@@ -252,6 +256,8 @@ class IdempotencyConcurrencyTest {
 
         BigDecimal aliceAfterFirst = accounts.findById("alice@demo").orElseThrow().getBalance();
         BigDecimal bobAfterFirst = accounts.findById("bob@demo").orElseThrow().getBalance();
+        assertEquals(0, aliceBefore.subtract(sendAmount).compareTo(aliceAfterFirst), "Sender balance should be debited");
+        assertEquals(0, bobBefore.add(sendAmount).compareTo(bobAfterFirst), "Receiver balance should be credited");
 
         // 2. Clear in-memory claim to force durable lookup from database
         idempotency.clear();
@@ -304,6 +310,7 @@ class IdempotencyConcurrencyTest {
     // =========================================================================
 
     @Test
+    @SuppressWarnings("null")
     void settlementRollsBackWhenLedgerWriteFails() throws Exception {
         BigDecimal aliceBefore = accounts.findById("alice@demo").orElseThrow().getBalance();
         BigDecimal bobBefore = accounts.findById("bob@demo").orElseThrow().getBalance();
@@ -400,8 +407,9 @@ class IdempotencyConcurrencyTest {
         assertEquals("insufficient_balance", r.reason());
         assertTrue(duration < 1000, "Insufficient balance should reject immediately without retry delay");
 
-        assertNotNull(r.transactionId());
-        Transaction tx = transactions.findById(r.transactionId()).orElseThrow();
+        Long txId = r.transactionId();
+        assertNotNull(txId);
+        Transaction tx = transactions.findById(txId).orElseThrow();
         assertEquals(Transaction.Status.REJECTED, tx.getStatus());
     }
 
@@ -443,6 +451,16 @@ class IdempotencyConcurrencyTest {
     // 8. Request Validation
     // =========================================================================
 
+    private ResultActions performDemoSend(ApiController.DemoSendRequest request) throws Exception {
+        MediaType mediaType = MediaType.APPLICATION_JSON;
+        assertNotNull(mediaType);
+        String json = objectMapper.writeValueAsString(request);
+        assertNotNull(json);
+        return mockMvc.perform(post("/api/demo/send")
+                .contentType(mediaType)
+                .content(json));
+    }
+
     @Test
     void missingOrBlankRequiredPaymentFieldsRejected() throws Exception {
         // Missing senderVpa
@@ -451,9 +469,7 @@ class IdempotencyConcurrencyTest {
         missingSender.amount = new BigDecimal("100.00");
         missingSender.pin = "1234";
 
-        mockMvc.perform(post("/api/demo/send")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(missingSender)))
+        performDemoSend(missingSender)
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("Validation failed"))
                 .andExpect(jsonPath("$.errors.senderVpa").value("Sender VPA is required"));
@@ -464,9 +480,7 @@ class IdempotencyConcurrencyTest {
         missingReceiver.amount = new BigDecimal("100.00");
         missingReceiver.pin = "1234";
 
-        mockMvc.perform(post("/api/demo/send")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(missingReceiver)))
+        performDemoSend(missingReceiver)
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("Validation failed"))
                 .andExpect(jsonPath("$.errors.receiverVpa").value("Receiver VPA is required"));
@@ -477,9 +491,7 @@ class IdempotencyConcurrencyTest {
         missingAmount.receiverVpa = "bob@demo";
         missingAmount.pin = "1234";
 
-        mockMvc.perform(post("/api/demo/send")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(missingAmount)))
+        performDemoSend(missingAmount)
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("Validation failed"))
                 .andExpect(jsonPath("$.errors.amount").value("Amount is required"));
@@ -490,9 +502,7 @@ class IdempotencyConcurrencyTest {
         missingPin.receiverVpa = "bob@demo";
         missingPin.amount = new BigDecimal("100.00");
 
-        mockMvc.perform(post("/api/demo/send")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(missingPin)))
+        performDemoSend(missingPin)
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("Validation failed"))
                 .andExpect(jsonPath("$.errors.pin").value("PIN is required"));
@@ -507,9 +517,7 @@ class IdempotencyConcurrencyTest {
         nonDigitsPin.amount = new BigDecimal("100.00");
         nonDigitsPin.pin = "12ab";
 
-        mockMvc.perform(post("/api/demo/send")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(nonDigitsPin)))
+        performDemoSend(nonDigitsPin)
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors.pin").value("PIN must be 4 to 6 digits"));
 
@@ -520,9 +528,7 @@ class IdempotencyConcurrencyTest {
         shortPin.amount = new BigDecimal("100.00");
         shortPin.pin = "123";
 
-        mockMvc.perform(post("/api/demo/send")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(shortPin)))
+        performDemoSend(shortPin)
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors.pin").value("PIN must be 4 to 6 digits"));
 
@@ -533,9 +539,7 @@ class IdempotencyConcurrencyTest {
         zeroAmount.amount = BigDecimal.ZERO;
         zeroAmount.pin = "1234";
 
-        mockMvc.perform(post("/api/demo/send")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(zeroAmount)))
+        performDemoSend(zeroAmount)
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors.amount").value("Amount must be greater than zero"));
 
@@ -546,9 +550,7 @@ class IdempotencyConcurrencyTest {
         negativeAmount.amount = new BigDecimal("-50.00");
         negativeAmount.pin = "1234";
 
-        mockMvc.perform(post("/api/demo/send")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(negativeAmount)))
+        performDemoSend(negativeAmount)
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors.amount").value("Amount must be greater than zero"));
     }
@@ -564,9 +566,7 @@ class IdempotencyConcurrencyTest {
         req4.ttl = 5;
         req4.startDevice = "phone-alice";
 
-        mockMvc.perform(post("/api/demo/send")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(req4)))
+        performDemoSend(req4)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.packetId").isNotEmpty())
                 .andExpect(jsonPath("$.ciphertextPreview").isNotEmpty())
@@ -580,9 +580,7 @@ class IdempotencyConcurrencyTest {
         req6.amount = new BigDecimal("35.00");
         req6.pin = "654321";
 
-        mockMvc.perform(post("/api/demo/send")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(req6)))
+        performDemoSend(req6)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.packetId").isNotEmpty());
     }

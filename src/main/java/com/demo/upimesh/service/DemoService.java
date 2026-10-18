@@ -82,6 +82,9 @@ public class DemoService {
         transactions.deleteAllInBatch();
 
         INITIAL_BALANCES.forEach((vpa, bal) -> {
+            if (vpa == null) {
+                return;
+            }
             Account acc = accounts.findById(vpa).orElse(null);
             if (acc != null) {
                 acc.setBalance(bal);

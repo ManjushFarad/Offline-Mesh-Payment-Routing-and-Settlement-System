@@ -126,7 +126,9 @@ public class MeshSimulatorService {
     }
 
     public void resetMesh() {
-        devices.values().forEach(VirtualDevice::clear);
+        for (VirtualDevice d : devices.values()) {
+            d.clear();
+        }
     }
 
     public record GossipResult(int transfers, Map<String, Integer> deviceCounts) {}
