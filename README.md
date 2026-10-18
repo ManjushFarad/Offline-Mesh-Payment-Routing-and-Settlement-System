@@ -36,50 +36,6 @@ The backend handles duplicate suppression, payload decryption, replay verificati
 
 ## How the Payment Flow Works
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Alice as Sender Device
-    participant Mesh as Mesh Nodes (Offline)
-    participant Bridge as Bridge Node (4G)
-    participant Ingestion as BridgeIngestionService
-    participant Idempotency as IdempotencyService
-    participant Settlement as SettlementService
-    participant DB as MySQL Database
-
-    Alice->>Alice: Build PaymentInstruction (VPA, amount, pinHash, nonce, timestamp)
-    Alice->>Alice: Hybrid encrypt (AES-256-GCM + RSA-OAEP server key)
-    Alice->>Mesh: Inject MeshPacket (packetId, TTL=5, ciphertext)
-    Mesh->>Mesh: Gossip rounds (forward copies, decrement TTL)
-    Mesh->>Bridge: Packet reaches bridge node
-    Bridge->>Ingestion: POST /api/bridge/ingest (MeshPacket)
-    Ingestion->>Ingestion: Compute SHA-256(ciphertext) -> packetHash
-    Ingestion->>Idempotency: claim(packetHash)
-    alt Already processed (Duplicate)
-        Idempotency-->>Ingestion: false
-        Ingestion-->>Bridge: 200 OK (DUPLICATE_DROPPED)
-    else First arrival
-        Idempotency-->>Ingestion: true
-        Ingestion->>Ingestion: Decrypt payload with RSA private key
-        Ingestion->>Ingestion: Check timestamp freshness
-        Ingestion->>Settlement: settle(instruction, packetHash, bridgeId, hops)
-        activate Settlement
-        Settlement->>DB: Check sender balance & self-transfer check
-        alt Insufficient funds or self-transfer
-            Settlement->>DB: Save Transaction(status=REJECTED)
-            Settlement-->>Ingestion: Return REJECTED
-        else Valid payment
-            Settlement->>DB: Update sender (-amount) and receiver (+amount)
-            Settlement->>DB: Insert LedgerEntry (DEBIT)
-            Settlement->>DB: Insert LedgerEntry (CREDIT)
-            Settlement->>DB: Insert Transaction(status=SETTLED)
-            Settlement-->>Ingestion: Return SETTLED
-        end
-        deactivate Settlement
-        Ingestion-->>Bridge: 200 OK (SETTLED / REJECTED)
-    end
-```
-
 ### Flow Breakdown
 
 1. **Packet creation**: The sender enters the payment amount and PIN. A `PaymentInstruction` is constructed with a unique UUID nonce, a signed timestamp, and a SHA-256 hash of the PIN.
